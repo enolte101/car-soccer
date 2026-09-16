@@ -4,39 +4,43 @@
 <meta charset="UTF-8">
 <title>Simple 3D Car Soccer</title>
 <style>
-  body { margin: 0; overflow: hidden; background: #111; font-family: sans-serif; cursor: default; }
+  body { margin: 0; overflow: hidden; background: #111; font-family: system-ui, sans-serif; cursor: default; }
   #ui {
     position: absolute; top: 12px; left: 12px;
-    color: white; background: rgba(0,0,0,0.55);
-    padding: 10px 14px; border-radius: 8px; font-size: 14px;
-    pointer-events: none; user-select: none; line-height: 1.4;
+    color: white; background: rgba(0,0,0,0.6);
+    padding: 12px 16px; border-radius: 10px; font-size: 13px;
+    pointer-events: none; user-select: none; line-height: 1.45;
+    max-width: 280px;
   }
   #boostBar {
-    position: absolute; bottom: 20px; left: 50%; transform: translateX(-50%);
-    width: 220px; height: 14px; background: #222; border-radius: 7px; overflow: hidden;
-    border: 1px solid #444;
+    position: absolute; bottom: 22px; left: 50%; transform: translateX(-50%);
+    width: 240px; height: 14px; background: #222; border-radius: 8px; overflow: hidden;
+    border: 1px solid #555;
   }
   #boostFill {
-    height: 100%; width: 100%; background: linear-gradient(90deg, #00aaff, #00ffcc);
-    transition: width 0.08s linear;
+    height: 100%; width: 100%;
+    background: linear-gradient(90deg, #0099ff, #00eebb);
+    transition: width 0.07s linear;
   }
   #hint {
-    position: absolute; bottom: 50px; left: 50%; transform: translateX(-50%);
-    color: #aaa; font-size: 13px; pointer-events: none;
+    position: absolute; bottom: 48px; left: 50%; transform: translateX(-50%);
+    color: #bbb; font-size: 12px; pointer-events: none; text-align: center;
   }
 </style>
 </head>
 <body>
 <div id="ui">
-  <b>WASD</b> = drive / air control<br>
-  <b>Space</b> = jump (double-jump in air)<br>
-  <b>Shift</b> = boost<br>
-  <b>Q / E</b> = air roll<br>
-  <b>Backspace</b> = reset field<br>
-  <b>Esc</b> = unlock mouse
+  <b>Current controls</b> (edit <code>binds</code> in code to change)<br><br>
+  W / S = drive + pitch in air<br>
+  A / D = steer / yaw<br>
+  Space = jump + double-jump<br>
+  Shift = boost<br>
+  Q / E = air roll<br>
+  Backspace = reset field<br>
+  Esc = unlock mouse
 </div>
 <div id="boostBar"><div id="boostFill"></div></div>
-<div id="hint">Click the game to lock mouse • Switch tabs or press Esc to unlock</div>
+<div id="hint">Click game to capture mouse • Esc or switch tab to free cursor</div>
 
 <script type="importmap">
 {
@@ -49,10 +53,27 @@
 <script type="module">
 import * as THREE from 'three';
 
+// ============================================================
+//  KEYBINDS – change any of these values to rebind
+//  Use the event.code values (e.g. "KeyW", "ArrowUp", "Space", "ShiftLeft", "KeyQ", etc.)
+// ============================================================
+const binds = {
+  forward:    'KeyW',      // change to 'ArrowUp' etc.
+  back:       'KeyS',
+  left:       'KeyA',
+  right:      'KeyD',
+  jump:       'Space',
+  boost:      'ShiftLeft',
+  rollLeft:   'KeyQ',
+  rollRight:  'KeyE',
+  reset:      'Backspace'
+};
+// ============================================================
+
 // ---------- Setup ----------
 const scene = new THREE.Scene();
 scene.background = new THREE.Color(0x87ceeb);
-scene.fog = new THREE.Fog(0x87ceeb, 50, 140);
+scene.fog = new THREE.Fog(0x87ceeb, 55, 150);
 
 const camera = new THREE.PerspectiveCamera(70, window.innerWidth / window.innerHeight, 0.1, 250);
 const renderer = new THREE.WebGLRenderer({ antialias: true });
@@ -62,22 +83,19 @@ renderer.shadowMap.type = THREE.PCFSoftShadowMap;
 document.body.appendChild(renderer.domElement);
 
 // Lights
-const hemi = new THREE.HemisphereLight(0xffffff, 0x445566, 1.15);
-scene.add(hemi);
-const dir = new THREE.DirectionalLight(0xffffff, 1.1);
+scene.add(new THREE.HemisphereLight(0xffffff, 0x445566, 1.15));
+const dir = new THREE.DirectionalLight(0xffffff, 1.15);
 dir.position.set(40, 60, 30);
 dir.castShadow = true;
 dir.shadow.mapSize.set(2048, 2048);
-dir.shadow.camera.near = 10;
-dir.shadow.camera.far = 150;
-dir.shadow.camera.left = dir.shadow.camera.bottom = -60;
-dir.shadow.camera.right = dir.shadow.camera.top = 60;
+dir.shadow.camera.left = dir.shadow.camera.bottom = -70;
+dir.shadow.camera.right = dir.shadow.camera.top = 70;
 scene.add(dir);
 
 // ---------- Arena ----------
 const arenaSize = 90;
-const half = arenaSize / 2 - 2;
-const wallHeight = 10;
+const half = arenaSize / 2 - 2.2;
+const wallHeight = 11;
 
 const floor = new THREE.Mesh(
   new THREE.PlaneGeometry(arenaSize, arenaSize),
@@ -87,55 +105,54 @@ floor.rotation.x = -Math.PI / 2;
 floor.receiveShadow = true;
 scene.add(floor);
 
-// Walls
-const wallMat = new THREE.MeshStandardMaterial({ color: 0x4a4a4a, roughness: 0.85 });
-function wall(w, h, d, x, y, z) {
+const wallMat = new THREE.MeshStandardMaterial({ color: 0x4a4a4a });
+function makeWall(w, h, d, x, y, z) {
   const m = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), wallMat);
   m.position.set(x, y, z);
   m.castShadow = true;
   m.receiveShadow = true;
   scene.add(m);
 }
-wall(arenaSize, wallHeight, 1.5, 0, wallHeight/2, -arenaSize/2);
-wall(arenaSize, wallHeight, 1.5, 0, wallHeight/2,  arenaSize/2);
-wall(1.5, wallHeight, arenaSize, -arenaSize/2, wallHeight/2, 0);
-wall(1.5, wallHeight, arenaSize,  arenaSize/2, wallHeight/2, 0);
+makeWall(arenaSize, wallHeight, 1.6, 0, wallHeight/2, -arenaSize/2);
+makeWall(arenaSize, wallHeight, 1.6, 0, wallHeight/2,  arenaSize/2);
+makeWall(1.6, wallHeight, arenaSize, -arenaSize/2, wallHeight/2, 0);
+makeWall(1.6, wallHeight, arenaSize,  arenaSize/2, wallHeight/2, 0);
 
-// Simple goals
-const goalMat = new THREE.MeshStandardMaterial({ color: 0x111111, transparent: true, opacity: 0.55 });
-const g1 = new THREE.Mesh(new THREE.BoxGeometry(14, 7, 2.5), goalMat);
-g1.position.set(0, 3.5, -arenaSize/2 + 1.2);
-scene.add(g1);
-const g2 = g1.clone();
-g2.position.z = arenaSize/2 - 1.2;
-scene.add(g2);
+// Goals (visual only)
+const goalMat = new THREE.MeshStandardMaterial({ color: 0x111111, transparent: true, opacity: 0.5 });
+const goal = new THREE.Mesh(new THREE.BoxGeometry(15, 8, 2.8), goalMat);
+goal.position.set(0, 4, -arenaSize/2 + 1.4);
+scene.add(goal);
+const goal2 = goal.clone();
+goal2.position.z = arenaSize/2 - 1.4;
+scene.add(goal2);
 
 // ---------- Car ----------
 const car = new THREE.Group();
-const bodyMat = new THREE.MeshStandardMaterial({ color: 0x1e6bff, metalness: 0.3, roughness: 0.45 });
-const body = new THREE.Mesh(new THREE.BoxGeometry(2.4, 0.65, 4.4), bodyMat);
+const body = new THREE.Mesh(
+  new THREE.BoxGeometry(2.5, 0.7, 4.5),
+  new THREE.MeshStandardMaterial({ color: 0x1e6bff, metalness: 0.35, roughness: 0.4 })
+);
 body.position.y = 0.55;
 body.castShadow = true;
 car.add(body);
 
-// Wheels
-const wheelGeo = new THREE.CylinderGeometry(0.42, 0.42, 0.32, 14);
+const wheelGeo = new THREE.CylinderGeometry(0.45, 0.45, 0.35, 14);
 const wheelMat = new THREE.MeshStandardMaterial({ color: 0x111111 });
-[[-1.15, 0.42, 1.5], [1.15, 0.42, 1.5], [-1.15, 0.42, -1.5], [1.15, 0.42, -1.5]].forEach(p => {
+[[-1.2, 0.45, 1.55], [1.2, 0.45, 1.55], [-1.2, 0.45, -1.55], [1.2, 0.45, -1.55]].forEach(([x,y,z]) => {
   const w = new THREE.Mesh(wheelGeo, wheelMat);
   w.rotation.z = Math.PI / 2;
-  w.position.set(...p);
+  w.position.set(x, y, z);
   w.castShadow = true;
   car.add(w);
 });
-
-car.position.set(0, 0.42, 18);
+car.position.set(0, 0.45, 18);
 scene.add(car);
 
 // ---------- Ball ----------
 const ball = new THREE.Mesh(
-  new THREE.SphereGeometry(1.15, 32, 32),
-  new THREE.MeshStandardMaterial({ color: 0xf5f5f5, roughness: 0.55, metalness: 0.05 })
+  new THREE.SphereGeometry(1.18, 32, 32),
+  new THREE.MeshStandardMaterial({ color: 0xf8f8f8, roughness: 0.5 })
 );
 ball.castShadow = true;
 ball.position.set(0, 1.2, 0);
@@ -150,20 +167,16 @@ const carState = {
   jumpsLeft: 2,
   jumpCooldown: 0
 };
-
-const ballState = {
-  vel: new THREE.Vector3()
-};
+const ballState = { vel: new THREE.Vector3() };
 
 // ---------- Input ----------
 const keys = {};
+const prevKeys = {};
+
 window.addEventListener('keydown', e => {
   keys[e.code] = true;
-  // prevent browser shortcuts / scrolling
-  if (['KeyW','KeyA','KeyS','KeyD','Space','ShiftLeft','ShiftRight','KeyQ','KeyE','Backspace'].includes(e.code)) {
-    e.preventDefault();
-  }
-  if (e.code === 'Backspace') resetField();
+  if (Object.values(binds).includes(e.code)) e.preventDefault();
+  if (e.code === binds.reset) resetField();
 });
 window.addEventListener('keyup', e => { keys[e.code] = false; });
 
@@ -172,26 +185,20 @@ let pointerLocked = false;
 
 document.addEventListener('mousemove', e => {
   if (pointerLocked) {
-    mouseX += e.movementX * 0.0018;
-    mouseY += e.movementY * 0.0018;
-    mouseY = THREE.MathUtils.clamp(mouseY, -0.55, 0.65);
+    mouseX += e.movementX * 0.0017;
+    mouseY += e.movementY * 0.0017;
+    mouseY = THREE.MathUtils.clamp(mouseY, -0.6, 0.7);
   }
 });
 
-renderer.domElement.addEventListener('click', () => {
-  renderer.domElement.requestPointerLock();
-});
+renderer.domElement.addEventListener('click', () => renderer.domElement.requestPointerLock());
 
 document.addEventListener('pointerlockchange', () => {
   pointerLocked = document.pointerLockElement === renderer.domElement;
   document.body.style.cursor = pointerLocked ? 'none' : 'default';
 });
-
-// Unlock when tab is hidden or window loses focus
 document.addEventListener('visibilitychange', () => {
-  if (document.hidden && document.pointerLockElement) {
-    document.exitPointerLock();
-  }
+  if (document.hidden && document.pointerLockElement) document.exitPointerLock();
 });
 window.addEventListener('blur', () => {
   if (document.pointerLockElement) document.exitPointerLock();
@@ -199,8 +206,8 @@ window.addEventListener('blur', () => {
 
 // ---------- Reset ----------
 function resetField() {
-  car.position.set(0, 0.42, 18);
-  car.quaternion.set(0, 0, 0, 1);
+  car.position.set(0, 0.45, 18);
+  car.quaternion.identity();
   carState.vel.set(0, 0, 0);
   carState.yawRate = 0;
   carState.onGround = true;
@@ -210,195 +217,173 @@ function resetField() {
 
   ball.position.set(0, 1.2, 0);
   ballState.vel.set(0, 0, 0);
-
-  mouseX = 0;
-  mouseY = 0;
+  mouseX = mouseY = 0;
 }
-
-// ---------- Helpers ----------
-function clamp(v, a, b) { return Math.max(a, Math.min(b, v)); }
 
 // ---------- Update ----------
 const clock = new THREE.Clock();
-const up = new THREE.Vector3(0, 1, 0);
 const tmp = new THREE.Vector3();
-const tmpQ = new THREE.Quaternion();
 
 function update(dt) {
-  // --- Orientation helpers ---
+  // Current orientation vectors
   const forward = new THREE.Vector3(0, 0, -1).applyQuaternion(car.quaternion);
   const right   = new THREE.Vector3(1, 0, 0).applyQuaternion(car.quaternion);
   const carUp   = new THREE.Vector3(0, 1, 0).applyQuaternion(car.quaternion);
 
-  // --- Input ---
+  // --- Input helpers (edge detection for jump) ---
+  const jumpJustPressed = keys[binds.jump] && !prevKeys[binds.jump];
+
   let throttle = 0;
-  if (keys['KeyW']) throttle += 1;
-  if (keys['KeyS']) throttle -= 1;          // S now works
+  if (keys[binds.forward]) throttle += 1;
+  if (keys[binds.back])    throttle -= 1;
 
   let steer = 0;
-  if (keys['KeyA']) steer += 1;
-  if (keys['KeyD']) steer -= 1;
+  if (keys[binds.left])  steer += 1;
+  if (keys[binds.right]) steer -= 1;
 
-  const boosting = (keys['ShiftLeft'] || keys['ShiftRight']) && carState.boost > 0;
-  if (boosting) {
-    carState.boost = Math.max(0, carState.boost - 28 * dt);
-  } else {
-    carState.boost = Math.min(100, carState.boost + 14 * dt);
-  }
+  const boosting = keys[binds.boost] && carState.boost > 0;
+  if (boosting) carState.boost = Math.max(0, carState.boost - 30 * dt);
+  else          carState.boost = Math.min(100, carState.boost + 15 * dt);
   document.getElementById('boostFill').style.width = carState.boost + '%';
 
-  // --- Ground vs Air ---
+  // ===================== GROUND =====================
   if (carState.onGround) {
-    // Driving
-    const accel = throttle * (boosting ? 52 : 32);
+    const accel = throttle * (boosting ? 55 : 34);
     carState.vel.addScaledVector(forward, accel * dt);
 
-    // Steering
-    carState.yawRate += steer * 4.2 * dt;
-    carState.yawRate *= 0.90;
+    carState.yawRate += steer * 4.5 * dt;
+    carState.yawRate *= 0.88;
 
-    // Friction
-    carState.vel.x *= 0.982;
-    carState.vel.z *= 0.982;
+    carState.vel.x *= 0.98;
+    carState.vel.z *= 0.98;
     carState.vel.y = 0;
 
-    // Level the car when on ground (fixes stuck air-roll)
-    const targetQ = new THREE.Quaternion().setFromEuler(new THREE.Euler(0, car.rotation.y, 0));
-    car.quaternion.slerp(targetQ, 1 - Math.pow(0.0008, dt));
-  } else {
-    // ===== AIR CONTROL (aerials + air dribble friendly) =====
-    // Pitch with W/S or mouse
-    const pitchInput = (keys['KeyW'] ? 1 : 0) + (keys['KeyS'] ? -1 : 0) - mouseY * 1.8;
-    const yawInput   = steer;
-    const rollInput  = (keys['KeyQ'] ? 1 : 0) + (keys['KeyE'] ? -1 : 0);
+    // Smoothly level the car (removes leftover air-roll / pitch)
+    const flatQ = new THREE.Quaternion().setFromEuler(new THREE.Euler(0, car.rotation.y, 0));
+    car.quaternion.slerp(flatQ, 1 - Math.pow(0.0005, dt));
+  }
+  // ===================== AIR =====================
+  else {
+    // Pitch (vertical tilt) – W/S + mouse
+    const pitch = (keys[binds.forward] ? 1 : 0) + (keys[binds.back] ? -1 : 0) - mouseY * 2.2;
+    // Yaw
+    const yaw   = steer;
+    // Roll
+    const roll  = (keys[binds.rollLeft] ? 1 : 0) + (keys[binds.rollRight] ? -1 : 0);
 
-    // Apply rotational control
-    car.rotateX(pitchInput * 2.6 * dt);   // pitch
-    car.rotateY(yawInput   * 2.4 * dt);   // yaw
-    car.rotateZ(rollInput  * 3.4 * dt);   // air roll
+    // Apply rotations (order matters less with small dt)
+    car.rotateX(pitch * 3.1 * dt);   // nose up/down
+    car.rotateY(yaw   * 2.6 * dt);
+    car.rotateZ(roll  * 3.6 * dt);   // air roll
 
-    // Air acceleration (weaker than ground)
-    const airAccel = throttle * (boosting ? 38 : 14);
-    carState.vel.addScaledVector(forward, airAccel * dt);
+    // Air throttle / boost (direction follows car nose)
+    const airForce = throttle * (boosting ? 42 : 16);
+    carState.vel.addScaledVector(forward, airForce * dt);
 
-    // Boost also gives a bit of upward force when pointing up
-    if (boosting) {
-      carState.vel.addScaledVector(carUp, 6 * dt);
-    }
+    // Extra upward help when boosting while pointing up
+    if (boosting) carState.vel.addScaledVector(carUp, 7 * dt);
 
     // Gravity
-    carState.vel.y -= 19.5 * dt;
+    carState.vel.y -= 20 * dt;
   }
 
-  // --- Jump / Double Jump ---
+  // ---------- Jump / Double Jump (edge triggered) ----------
   carState.jumpCooldown -= dt;
-  if (keys['Space'] && carState.jumpCooldown <= 0 && carState.jumpsLeft > 0) {
+
+  if (jumpJustPressed && carState.jumpsLeft > 0 && carState.jumpCooldown <= 0) {
     if (carState.onGround) {
-      carState.vel.y = 12.5;
+      // First jump
+      carState.vel.y = 13;
       carState.onGround = false;
-      carState.jumpsLeft = 1;          // leave one for double jump
+      carState.jumpsLeft = 1;
     } else {
-      // Double jump – direction based on car orientation
-      carState.vel.addScaledVector(carUp, 11);
+      // Double jump – pushes in the direction the car is facing (carUp)
+      carState.vel.addScaledVector(carUp, 12);
       carState.jumpsLeft = 0;
     }
-    carState.jumpCooldown = 0.28;
+    carState.jumpCooldown = 0.25;
   }
 
-  // Integrate position
+  // Integrate
   car.position.addScaledVector(carState.vel, dt);
 
-  // Ground collision + landing
-  if (car.position.y <= 0.42) {
-    car.position.y = 0.42;
+  // Ground collision
+  if (car.position.y <= 0.45) {
+    car.position.y = 0.45;
     if (carState.vel.y < 0) carState.vel.y = 0;
     carState.onGround = true;
-    carState.jumpsLeft = 2;            // reset jumps on land
+    carState.jumpsLeft = 2;           // restore both jumps on landing
   } else {
     carState.onGround = false;
   }
 
-  // Arena bounds (soft)
-  car.position.x = clamp(car.position.x, -half, half);
-  car.position.z = clamp(car.position.z, -half, half);
+  // Soft walls
+  car.position.x = THREE.MathUtils.clamp(car.position.x, -half, half);
+  car.position.z = THREE.MathUtils.clamp(car.position.z, -half, half);
 
-  // Apply yaw from ground steering
-  if (carState.onGround) {
-    car.rotation.y += carState.yawRate * dt;
-  }
+  // Apply ground yaw
+  if (carState.onGround) car.rotation.y += carState.yawRate * dt;
 
   // ---------- Ball ----------
-  ballState.vel.y -= 17 * dt;
+  ballState.vel.y -= 17.5 * dt;
   ball.position.addScaledVector(ballState.vel, dt);
 
-  // Floor bounce
-  if (ball.position.y < 1.15) {
-    ball.position.y = 1.15;
-    ballState.vel.y = -ballState.vel.y * 0.72;
-    ballState.vel.x *= 0.985;
-    ballState.vel.z *= 0.985;
+  if (ball.position.y < 1.18) {
+    ball.position.y = 1.18;
+    ballState.vel.y *= -0.74;
+    ballState.vel.x *= 0.987;
+    ballState.vel.z *= 0.987;
   }
-
-  // Walls
   if (Math.abs(ball.position.x) > half) {
     ball.position.x = Math.sign(ball.position.x) * half;
-    ballState.vel.x *= -0.82;
+    ballState.vel.x *= -0.8;
   }
   if (Math.abs(ball.position.z) > half) {
     ball.position.z = Math.sign(ball.position.z) * half;
-    ballState.vel.z *= -0.82;
+    ballState.vel.z *= -0.8;
   }
 
-  // ===== Car ↔ Ball collision (better for aerials & air dribbles) =====
+  // Car-ball (good for aerials & air dribbles)
   const toBall = tmp.subVectors(ball.position, car.position);
   const dist = toBall.length();
-  const touchRadius = 2.95;
-
-  if (dist < touchRadius) {
+  if (dist < 3.05) {
     const normal = toBall.normalize();
-    const relVel = carState.vel.clone().sub(ballState.vel);
-    const closing = relVel.dot(normal);
+    const rel = carState.vel.clone().sub(ballState.vel);
+    const closing = rel.dot(normal);
+    const power = 1.6 + (boosting ? 0.85 : 0) + Math.min(carState.vel.length() * 0.035, 1.3);
 
-    // Stronger hit when boosting or moving fast
-    const power = 1.55 + (boosting ? 0.7 : 0) + Math.min(carState.vel.length() * 0.04, 1.2);
-
-    if (closing > 0 || dist < touchRadius * 0.85) {
-      // Impulse
-      ballState.vel.addScaledVector(normal, Math.max(closing * power, 3.5));
-      // slight car recoil
-      carState.vel.addScaledVector(normal, -closing * 0.18);
-
-      // Soft separation so you can stay close for air dribbles
-      const penetrate = touchRadius - dist;
-      ball.position.addScaledVector(normal, penetrate * 0.55);
+    if (closing > -1 || dist < 2.5) {
+      ballState.vel.addScaledVector(normal, Math.max(closing * power, 4));
+      carState.vel.addScaledVector(normal, -closing * 0.2);
+      ball.position.addScaledVector(normal, (3.05 - dist) * 0.6);
     }
-
-    // Tiny “stick” help when very close and slow (helps air dribble feel)
-    if (dist < 2.4 && relVel.length() < 8) {
-      ballState.vel.lerp(carState.vel, 0.08);
+    // slight stick for air dribble
+    if (dist < 2.5 && rel.length() < 9) {
+      ballState.vel.lerp(carState.vel, 0.09);
     }
   }
 
-  // ---------- Camera (chase + mouse look) ----------
-  const idealOffset = new THREE.Vector3(0, 3.8, 10.5);
+  // ---------- Camera ----------
+  const idealOffset = new THREE.Vector3(0, 4.0, 11);
   idealOffset.applyQuaternion(car.quaternion);
-  const idealPos = car.position.clone().add(idealOffset);
+  camera.position.lerp(car.position.clone().add(idealOffset), 1 - Math.pow(0.0006, dt));
 
-  camera.position.lerp(idealPos, 1 - Math.pow(0.0007, dt));
+  const look = car.position.clone();
+  look.y += 1.5;
+  look.add(right.multiplyScalar(mouseX * 5.5));
+  look.y += mouseY * 4.5;
+  camera.lookAt(look);
 
-  const lookAt = car.position.clone();
-  lookAt.y += 1.4;
-  // mouse look offset
-  lookAt.add(right.clone().multiplyScalar(mouseX * 5));
-  lookAt.y += mouseY * 4;
-  camera.lookAt(lookAt);
+  // store previous keys for edge detection
+  Object.keys(keys).forEach(k => prevKeys[k] = keys[k]);
+  // also clear keys that are no longer down
+  Object.keys(prevKeys).forEach(k => { if (!keys[k]) prevKeys[k] = false; });
 }
 
 // ---------- Loop ----------
 function animate() {
   requestAnimationFrame(animate);
-  const dt = Math.min(clock.getDelta(), 0.033);
-  update(dt);
+  update(Math.min(clock.getDelta(), 0.033));
   renderer.render(scene, camera);
 }
 animate();
