@@ -1,1 +1,309 @@
 
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Simple 3D Car Soccer</title>
+<style>
+  body { margin: 0; overflow: hidden; background: #111; font-family: sans-serif; }
+  #ui {
+    position: absolute; top: 12px; left: 12px;
+    color: white; background: rgba(0,0,0,0.5);
+    padding: 10px 14px; border-radius: 8px; font-size: 14px;
+    pointer-events: none; user-select: none;
+  }
+  #boostBar {
+    position: absolute; bottom: 20px; left: 50%; transform: translateX(-50%);
+    width: 200px; height: 12px; background: #333; border-radius: 6px; overflow: hidden;
+  }
+  #boostFill {
+    height: 100%; width: 100%; background: #00ccff; transition: width 0.1s;
+  }
+</style>
+</head>
+<body>
+<div id="ui">
+  WASD = drive<br>
+  Space = jump<br>
+  Shift = boost<br>
+  Q / E = air roll<br>
+  Click to lock mouse
+</div>
+<div id="boostBar"><div id="boostFill"></div></div>
+
+<script type="importmap">
+{
+  "imports": {
+    "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
+    "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/"
+  }
+}
+</script>
+
+<script type="module">
+import * as THREE from 'three';
+
+// ---------- Setup ----------
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x87ceeb);
+scene.fog = new THREE.Fog(0x87ceeb, 40, 120);
+
+const camera = new THREE.PerspectiveCamera(70, window.innerWidth / window.innerHeight, 0.1, 200);
+const renderer = new THREE.WebGLRenderer({ antialias: true });
+renderer.setSize(window.innerWidth, window.innerHeight);
+renderer.shadowMap.enabled = true;
+document.body.appendChild(renderer.domElement);
+
+// Lights
+const hemi = new THREE.HemisphereLight(0xffffff, 0x444444, 1.2);
+scene.add(hemi);
+const dir = new THREE.DirectionalLight(0xffffff, 1.0);
+dir.position.set(30, 50, 20);
+dir.castShadow = true;
+dir.shadow.mapSize.set(2048, 2048);
+scene.add(dir);
+
+// ---------- Arena ----------
+const arenaSize = 80;
+const wallHeight = 8;
+
+const floorGeo = new THREE.PlaneGeometry(arenaSize, arenaSize);
+const floorMat = new THREE.MeshStandardMaterial({ color: 0x2d5a27 });
+const floor = new THREE.Mesh(floorGeo, floorMat);
+floor.rotation.x = -Math.PI / 2;
+floor.receiveShadow = true;
+scene.add(floor);
+
+// Walls
+const wallMat = new THREE.MeshStandardMaterial({ color: 0x555555 });
+function makeWall(w, h, d, x, y, z, ry = 0) {
+  const m = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), wallMat);
+  m.position.set(x, y, z);
+  m.rotation.y = ry;
+  m.castShadow = true;
+  m.receiveShadow = true;
+  scene.add(m);
+  return m;
+}
+makeWall(arenaSize, wallHeight, 1, 0, wallHeight/2, -arenaSize/2);
+makeWall(arenaSize, wallHeight, 1, 0, wallHeight/2,  arenaSize/2);
+makeWall(1, wallHeight, arenaSize, -arenaSize/2, wallHeight/2, 0);
+makeWall(1, wallHeight, arenaSize,  arenaSize/2, wallHeight/2, 0);
+
+// Goals (simple visual)
+const goalMat = new THREE.MeshStandardMaterial({ color: 0x222222, transparent: true, opacity: 0.6 });
+const goal1 = new THREE.Mesh(new THREE.BoxGeometry(12, 6, 2), goalMat);
+goal1.position.set(0, 3, -arenaSize/2 + 1);
+scene.add(goal1);
+const goal2 = goal1.clone();
+goal2.position.z = arenaSize/2 - 1;
+scene.add(goal2);
+
+// ---------- Car ----------
+const car = new THREE.Group();
+const body = new THREE.Mesh(
+  new THREE.BoxGeometry(2.2, 0.6, 4.2),
+  new THREE.MeshStandardMaterial({ color: 0x2266ff })
+);
+body.position.y = 0.5;
+body.castShadow = true;
+car.add(body);
+
+// Simple wheels
+const wheelGeo = new THREE.CylinderGeometry(0.4, 0.4, 0.3, 12);
+const wheelMat = new THREE.MeshStandardMaterial({ color: 0x111111 });
+[[-1, 0.4, 1.4], [1, 0.4, 1.4], [-1, 0.4, -1.4], [1, 0.4, -1.4]].forEach(([x,y,z]) => {
+  const w = new THREE.Mesh(wheelGeo, wheelMat);
+  w.rotation.z = Math.PI/2;
+  w.position.set(x, y, z);
+  car.add(w);
+});
+
+car.position.set(0, 0.4, 15);
+scene.add(car);
+
+// ---------- Ball ----------
+const ball = new THREE.Mesh(
+  new THREE.SphereGeometry(1.1, 32, 32),
+  new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.7, metalness: 0.1 })
+);
+ball.castShadow = true;
+ball.position.set(0, 1.2, 0);
+scene.add(ball);
+
+// ---------- Physics state ----------
+const carState = {
+  vel: new THREE.Vector3(),
+  angularVel: 0,
+  onGround: true,
+  boost: 100,
+  jumpCooldown: 0
+};
+
+const ballState = {
+  vel: new THREE.Vector3(),
+  angularVel: new THREE.Vector3()
+};
+
+// ---------- Input ----------
+const keys = {};
+window.addEventListener('keydown', e => keys[e.code] = true);
+window.addEventListener('keyup',   e => keys[e.code] = false);
+
+let mouseX = 0, mouseY = 0;
+document.addEventListener('mousemove', e => {
+  if (document.pointerLockElement) {
+    mouseX += e.movementX * 0.002;
+    mouseY += e.movementY * 0.002;
+    mouseY = Math.max(-0.4, Math.min(0.6, mouseY));
+  }
+});
+renderer.domElement.addEventListener('click', () => {
+  renderer.domElement.requestPointerLock();
+});
+
+// ---------- Helpers ----------
+function clamp(v, min, max) { return Math.max(min, Math.min(max, v)); }
+
+// ---------- Update ----------
+const clock = new THREE.Clock();
+function update(dt) {
+  // Car controls
+  const forward = new THREE.Vector3(0, 0, -1).applyQuaternion(car.quaternion);
+  const right   = new THREE.Vector3(1, 0, 0).applyQuaternion(car.quaternion);
+
+  let accel = 0;
+  if (keys['KeyW']) accel += 28;
+  if (keys['KeyS']) accel -= 18;
+
+  // Boost
+  const boosting = keys['ShiftLeft'] || keys['ShiftRight'];
+  if (boosting && carState.boost > 0) {
+    accel += 35;
+    carState.boost = Math.max(0, carState.boost - 25 * dt);
+  } else {
+    carState.boost = Math.min(100, carState.boost + 12 * dt);
+  }
+  document.getElementById('boostFill').style.width = carState.boost + '%';
+
+  // Steering
+  let steer = 0;
+  if (keys['KeyA']) steer += 1;
+  if (keys['KeyD']) steer -= 1;
+
+  // Apply forces
+  if (carState.onGround) {
+    carState.vel.addScaledVector(forward, accel * dt);
+    carState.angularVel += steer * 3.5 * dt;
+    // friction
+    carState.vel.multiplyScalar(0.985);
+    carState.angularVel *= 0.92;
+  } else {
+    // air control (weaker)
+    carState.vel.addScaledVector(forward, accel * 0.25 * dt);
+    carState.angularVel += steer * 1.8 * dt;
+    carState.vel.y -= 22 * dt; // gravity
+  }
+
+  // Jump
+  carState.jumpCooldown -= dt;
+  if (keys['Space'] && carState.onGround && carState.jumpCooldown <= 0) {
+    carState.vel.y = 11;
+    carState.onGround = false;
+    carState.jumpCooldown = 0.4;
+  }
+
+  // Air roll
+  if (!carState.onGround) {
+    if (keys['KeyQ']) car.rotateZ(2.8 * dt);
+    if (keys['KeyE']) car.rotateZ(-2.8 * dt);
+  }
+
+  // Integrate car
+  car.position.addScaledVector(carState.vel, dt);
+  car.rotation.y += carState.angularVel * dt;
+
+  // Ground collision
+  if (car.position.y < 0.4) {
+    car.position.y = 0.4;
+    carState.vel.y = Math.max(0, carState.vel.y);
+    carState.onGround = true;
+  } else {
+    carState.onGround = false;
+  }
+
+  // Arena bounds (simple)
+  const half = arenaSize / 2 - 1.5;
+  car.position.x = clamp(car.position.x, -half, half);
+  car.position.z = clamp(car.position.z, -half, half);
+
+  // ---------- Ball physics (very simple) ----------
+  ballState.vel.y -= 18 * dt; // gravity
+  ball.position.addScaledVector(ballState.vel, dt);
+
+  // Bounce floor
+  if (ball.position.y < 1.1) {
+    ball.position.y = 1.1;
+    ballState.vel.y = -ballState.vel.y * 0.75;
+    ballState.vel.x *= 0.98;
+    ballState.vel.z *= 0.98;
+  }
+
+  // Walls
+  if (Math.abs(ball.position.x) > half) {
+    ball.position.x = Math.sign(ball.position.x) * half;
+    ballState.vel.x *= -0.8;
+  }
+  if (Math.abs(ball.position.z) > half) {
+    ball.position.z = Math.sign(ball.position.z) * half;
+    ballState.vel.z *= -0.8;
+  }
+
+  // Car-ball collision (very basic)
+  const toBall = new THREE.Vector3().subVectors(ball.position, car.position);
+  const dist = toBall.length();
+  if (dist < 2.8) {
+    const push = toBall.normalize();
+    const relative = carState.vel.clone().sub(ballState.vel);
+    const impact = relative.dot(push);
+    if (impact > 0) {
+      ballState.vel.addScaledVector(push, impact * 1.4 + 4);
+      carState.vel.addScaledVector(push, -impact * 0.3);
+    }
+    // separate
+    ball.position.addScaledVector(push, (2.8 - dist) * 0.6);
+  }
+
+  // ---------- Camera (chase cam) ----------
+  const idealOffset = new THREE.Vector3(0, 3.5, 9);
+  idealOffset.applyQuaternion(car.quaternion);
+  const idealPos = car.position.clone().add(idealOffset);
+
+  // smooth follow
+  camera.position.lerp(idealPos, 1 - Math.pow(0.001, dt));
+
+  // look at car + slight mouse look
+  const lookTarget = car.position.clone();
+  lookTarget.y += 1.2;
+  lookTarget.x += mouseX * 4;
+  lookTarget.y += mouseY * 3;
+  camera.lookAt(lookTarget);
+}
+
+// ---------- Loop ----------
+function animate() {
+  requestAnimationFrame(animate);
+  const dt = Math.min(clock.getDelta(), 0.05);
+  update(dt);
+  renderer.render(scene, camera);
+}
+animate();
+
+window.addEventListener('resize', () => {
+  camera.aspect = window.innerWidth / window.innerHeight;
+  camera.updateProjectionMatrix();
+  renderer.setSize(window.innerWidth, window.innerHeight);
+});
+</script>
+</body>
+</html>
